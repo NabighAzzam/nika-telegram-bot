@@ -1,0 +1,12 @@
+{
+  "name": "nika-telegram-bot",
+  "version": "1.0.0",
+  "description": "Nika - Personal AI Telegram Bot for Bigh",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "keywords": [],
+  "author": "Nika",
+  "license": "ISC"
+}
