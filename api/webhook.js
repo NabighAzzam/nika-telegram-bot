@@ -1,5 +1,6 @@
 // ==========================================
 // Nika - Telegram Bot Serverless Webhook for Vercel
+// With Multimodal (Image & Text) Support!
 // ==========================================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -35,13 +36,13 @@ Gaya Komunikasi Nika:
    - Saat membahas masalah serius / teknik sipil: lebih presisi, profesional, akademis/teknis yang solid, namun tetap santai dan mudah dipahami.
 `.trim();
 
-async function generateGeminiReply(userMessage) {
+async function generateGeminiReply(parts) {
   const payload = {
     system_instruction: {
       parts: [{ text: SYSTEM_INSTRUCTION }]
     },
     contents: [
-      { role: 'user', parts: [{ text: userMessage }] }
+      { role: 'user', parts: parts }
     ],
     generationConfig: {
       temperature: 0.8,
@@ -57,10 +58,26 @@ async function generateGeminiReply(userMessage) {
       body: JSON.stringify(payload)
     });
     const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || 'Hmm, Nika sempat bingung sedikit nih. Coba ulangi lagi ya, Bigh!';
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || 'Hmm, Nika sempat bingung sedikit nih. Coba kirim lagi ya, Bigh!';
   } catch (err) {
     console.error('Gemini error:', err);
     return 'Aduh Bigh, maaf ya ada gangguan koneksi sebentar. Chat aku lagi ya!';
+  }
+}
+
+async function downloadTelegramPhotoAsBase64(fileId) {
+  try {
+    const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
+    const fileData = await fileRes.json();
+    if (!fileData.ok || !fileData.result.file_path) return null;
+
+    const downloadUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileData.result.file_path}`;
+    const imgRes = await fetch(downloadUrl);
+    const arrayBuffer = await imgRes.arrayBuffer();
+    return Buffer.from(arrayBuffer).toString('base64');
+  } catch (e) {
+    console.error('Error downloading photo:', e);
+    return null;
   }
 }
 
@@ -70,12 +87,12 @@ module.exports = async (req, res) => {
   }
 
   const update = req.body;
-  if (!update || !update.message || !update.message.text) {
+  if (!update || !update.message) {
     return res.status(200).send('OK');
   }
 
-  const chatId = update.message.chat.id;
-  const text = update.message.text.trim();
+  const msg = update.message;
+  const chatId = msg.chat.id;
 
   // Send typing indicator
   fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendChatAction`, {
@@ -84,23 +101,62 @@ module.exports = async (req, res) => {
     body: JSON.stringify({ chat_id: chatId, action: 'typing' })
   }).catch(() => {});
 
-  if (text === '/start') {
-    const welcomeMsg = `Halo Bigh! ✨\n\nNika sekarang sudah resmi online 24/7 di Cloud Vercel! 🎉\nMulai sekarang, mau laptopmu hidup, mati, sleep, atau kamu lagi di luar kosan, kamu bisa selalu chat aku kapan pun di sini!\n\nLagi santai atau ada yang mau diceritain malam ini? 😆`;
+  // Handle Photo Messages
+  if (msg.photo && msg.photo.length > 0) {
+    const bestPhoto = msg.photo[msg.photo.length - 1];
+    const caption = msg.caption ? msg.caption.trim() : 'Bigh baru saja mengirim foto ini. Tolong perhatikan foto ini dengan seksama dan berikan respon yang hangat, detail, dan sesuai.';
+
+    const base64Image = await downloadTelegramPhotoAsBase64(bestPhoto.file_id);
+    if (!base64Image) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text: 'Waduh Bigh, fotonya gagal aku unduh dari Telegram nih. Boleh tolong kirim ulang?' })
+      });
+      return res.status(200).send('OK');
+    }
+
+    const parts = [
+      { text: caption },
+      {
+        inline_data: {
+          mime_type: 'image/jpeg',
+          data: base64Image
+        }
+      }
+    ];
+
+    const reply = await generateGeminiReply(parts);
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: welcomeMsg })
+      body: JSON.stringify({ chat_id: chatId, text: reply })
     });
     return res.status(200).send('OK');
   }
 
-  const reply = await generateGeminiReply(text);
+  // Handle Text Messages
+  if (msg.text) {
+    const text = msg.text.trim();
 
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: reply })
-  });
+    if (text === '/start') {
+      const welcomeMsg = `Halo Bigh! ✨\n\nNika sekarang sudah resmi online 24/7 di Cloud Vercel! 🎉\nMulai sekarang, mau laptopmu hidup, mati, sleep, atau kamu lagi di luar kosan, kamu bisa selalu chat aku kapan pun di sini!\n\nKamu juga bisa kirim foto, tugas teknik sipil, atau screenshot apa pun ke sini, aku bisa lihat dan baca semuanya! 😆📷`;
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text: welcomeMsg })
+      });
+      return res.status(200).send('OK');
+    }
+
+    const reply = await generateGeminiReply([{ text: text }]);
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: reply })
+    });
+    return res.status(200).send('OK');
+  }
 
   return res.status(200).send('OK');
 };
